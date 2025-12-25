@@ -1,0 +1,25 @@
+{
+  "name": "koishi-plugin-bili-link-previewer",
+  "description": "B 站视频信息预览插件：渲染预览图，不用点开也能知道视频内容。 / A Bilibili video preview plugin that renders an image so you can see what the video is about without clicking in.",
+  "version": "0.0.1",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "scripts": {},
+  "keywords": [
+    "chatbot",
+    "koishi",
+    "plugin"
+  ],
+  "devDependencies": {
+    "@koishijs/client": "^5.30.4"
+  },
+  "peerDependencies": {
+    "@koishijs/plugin-console": "^5.30.4",
+    "koishi": "^4.18.7"
+  }
+}
