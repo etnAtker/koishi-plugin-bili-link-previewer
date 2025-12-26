@@ -69,24 +69,24 @@ function formatStatNumber(num: number) {
 }
 
 function isRepeat(ctx: Context, session: Session, bvNumber: string) {
-  const now = Date.now()
+  const timestamp = Date.now()
   const timeout = ctx.config.antiRepeatTimeout * 1000
   const guildId = session.guildId || session.id
+  const cacheKey = `${guildId}#${bvNumber}`
+
   let isRepeat = false
 
-
   for (const [key, value] of Object.entries(recentBvNumbers)) {
-    const k = guildId + '#' + key
-    if (now - value > timeout) {
-      log.info(`${k} removed from anti-repeat.`)
+    if (timestamp - value > timeout) {
+      log.info(`${key} removed from anti-repeat.`)
       delete recentBvNumbers[key]
-    } else if (key === bvNumber) {
+    } else if (key === cacheKey) {
       isRepeat = true
-      log.info(`${k} triggered anti-repeat.`)
+      log.info(`${key} triggered anti-repeat.`)
     }
   }
 
-  recentBvNumbers[bvNumber] = now
+  recentBvNumbers[cacheKey] = timestamp
 
   return isRepeat
 }
