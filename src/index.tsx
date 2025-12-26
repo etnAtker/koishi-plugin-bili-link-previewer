@@ -107,7 +107,7 @@ export function apply(ctx: Context, config: Config) {
 
     const resp = await fetchInfo(ctx, bvNumber)
     if (resp.code !== 0 || !resp.data) {
-      log.debug(`Fetch video info failed (${resp.code}: ${resp.message}). Raw user message: \n${content}`)
+      log.error(`Fetch video info failed (${resp.code}: ${resp.message}). Raw user message: \n${content}`)
       return `${bvNumber} 视频信息获取异常：${resp.message} (${resp.code})`
     }
 
