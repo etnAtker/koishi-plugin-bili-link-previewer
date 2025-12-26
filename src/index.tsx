@@ -1,4 +1,4 @@
-import { Context, Schema } from 'koishi'
+import { Context, Logger, Schema, Session } from 'koishi'
 import { } from "koishi-plugin-puppeteer";
 import { Eta } from "eta";
 
@@ -9,20 +9,28 @@ export const name = 'bili-link-previewer'
 export const inject = ['puppeteer']
 
 export interface Config {
+  antiRepeatTimeout: number
+  userAgent: string
 }
 
-export const Config: Schema<Config> = Schema.object({})
+const defaultUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+export const Config: Schema<Config> = Schema.object({
+  antiRepeatTimeout: Schema.number().default(10).description('对于重复BV号的静默时长，单位秒。用于多个机器人的环境，防止回声。'),
+  userAgent: Schema.string().default(defaultUserAgent).description('User-Agent'),
+})
 
-const bvNumberRegex = /[Bb][Vv][0-9a-zA-Z]{10}/
-const ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const bvNumberRegex = /(?<![0-9a-zA-Z])[Bb][Vv][0-9a-zA-Z]{10}(?![0-9a-zA-Z])/
 const eta = new Eta()
+
+let log: Logger;
+let recentBvNumbers: Record<string, number> = {}
 
 async function fetchInfo(ctx: Context, bvNumber: string) {
   const url = `https://api.bilibili.com/x/web-interface/view?bvid=${bvNumber}`
   return await ctx.http.get<BiliResp<VideoInfo>>(url, {
     headers: {
       Host: 'api.bilibili.com',
-      'User-Agent': ua
+      'User-Agent': ctx.config.userAgent
     }
   })
 }
@@ -60,15 +68,46 @@ function formatStatNumber(num: number) {
   return num
 }
 
-export function apply(ctx: Context) {
+function isRepeat(ctx: Context, session: Session, bvNumber: string) {
+  const now = Date.now()
+  const timeout = ctx.config.antiRepeatTimeout * 1000
+  const guildId = session.guildId || session.id
+  let isRepeat = false
+
+
+  for (const [key, value] of Object.entries(recentBvNumbers)) {
+    const k = guildId + '#' + key
+    if (now - value > timeout) {
+      log.info(`${k} removed from anti-repeat.`)
+      delete recentBvNumbers[key]
+    } else if (key === bvNumber) {
+      isRepeat = true
+      log.info(`${k} triggered anti-repeat.`)
+    }
+  }
+
+  recentBvNumbers[bvNumber] = now
+
+  return isRepeat
+}
+
+export function apply(ctx: Context, config: Config) {
+  log = ctx.logger('bili-link-previewer')
+  log.info('Plugin reloaded.')
+  log.info('Config: antiRepeatTimeout = ' + config.antiRepeatTimeout)
+  log.info('Config: userAgent = ' + config.userAgent)
+
   ctx.middleware(async (session, next) => {
-    const bv = bvNumberRegex.exec(session.stripped.content)
+    const content = session.stripped.content
+    const bv = bvNumberRegex.exec(content)
     if (!bv) return next()
 
     const bvNumber = bv[0]
-    const resp = await fetchInfo(ctx, bvNumber)
+    if (isRepeat(ctx, session, bvNumber)) return
 
+    const resp = await fetchInfo(ctx, bvNumber)
     if (resp.code !== 0 || !resp.data) {
+      log.debug(`Fetch video info failed (${resp.code}: ${resp.message}). Raw user message: \n${content}`)
       return `${bvNumber} 视频信息获取异常：${resp.message} (${resp.code})`
     }
 
