@@ -130,7 +130,6 @@ export function apply(ctx: Context, config: Config) {
     return await ctx.puppeteer.render(
       cardHtml,
       async (page, next) => {
-        await page.setViewport({ width: 600, height: 850 });
         const card = await page.$('#card');
         return next(card);
       }
