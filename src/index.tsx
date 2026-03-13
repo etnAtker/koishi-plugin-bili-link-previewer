@@ -133,6 +133,6 @@ export function apply(ctx: Context, config: Config) {
         const card = await page.$('#card');
         return next(card);
       }
-    )
+    ) + `\nhttps://www.bilibili.com/video/${bvNumber}`
   })
 }
