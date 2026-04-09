@@ -6,7 +6,29 @@ export const cardTemplate = String.raw`
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bilibili Card Vertical</title>
   <style>
-    @import url('https://fonts.font.im/css2?family=Noto+Sans+SC:wght@400;500;700&display=swap');
+    @font-face {
+      font-family: 'Noto Sans SC';
+      font-style: normal;
+      font-weight: 400;
+      font-display: swap;
+      src: url('<%= it.fontRegularUrl %>') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'Noto Sans SC';
+      font-style: normal;
+      font-weight: 500;
+      font-display: swap;
+      src: url('<%= it.fontMediumUrl %>') format('truetype');
+    }
+
+    @font-face {
+      font-family: 'Noto Sans SC';
+      font-style: normal;
+      font-weight: 700;
+      font-display: swap;
+      src: url('<%= it.fontBoldUrl %>') format('truetype');
+    }
 
     * {
       box-sizing: border-box;
