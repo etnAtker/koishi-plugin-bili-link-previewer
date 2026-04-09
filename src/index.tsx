@@ -1,12 +1,13 @@
 import { Context, Logger, Schema, Session } from 'koishi'
-import { } from "koishi-plugin-puppeteer";
-import { Eta } from "eta";
+import {} from 'koishi-plugin-puppeteer'
+import { Eta } from 'eta'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import { cardTemplate } from './template'
-import { BiliResp, VideoInfo } from "./model";
+import { BiliResp, VideoInfo } from './model'
+import { get } from 'node:http'
 
 export const name = 'bili-link-previewer'
 export const inject = ['puppeteer']
@@ -16,16 +17,24 @@ export interface Config {
   userAgent: string
 }
 
-const defaultUserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
+const defaultUserAgent =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
 export const Config: Schema<Config> = Schema.object({
-  antiRepeatTimeout: Schema.number().default(10).description('对于重复BV号的静默时长，单位秒。用于多个机器人的环境，防止回声。'),
-  userAgent: Schema.string().default(defaultUserAgent).description('User-Agent'),
+  antiRepeatTimeout: Schema.number()
+    .default(10)
+    .description(
+      '对于重复BV号的静默时长，单位秒。用于多个机器人的环境，防止回声。',
+    ),
+  userAgent: Schema.string()
+    .default(defaultUserAgent)
+    .description('User-Agent'),
 })
 
 const bvNumberRegex = /(?<![0-9a-zA-Z])[Bb][Vv][0-9a-zA-Z]{10}(?![0-9a-zA-Z])/
+const shortLinkRegex = /b23\.tv(?:\\)?\/([0-9a-zA-Z]+)/
 const eta = new Eta()
 
-let log: Logger;
+let log: Logger
 let recentBvNumbers: Record<string, number> = {}
 
 const fontAssets = {
@@ -80,12 +89,16 @@ async function fetchInfo(ctx: Context, bvNumber: string, userAgent: string) {
   return await ctx.http.get<BiliResp<VideoInfo>>(url, {
     headers: {
       Host: 'api.bilibili.com',
-      'User-Agent': userAgent
-    }
+      'User-Agent': userAgent,
+    },
   })
 }
 
-async function fetchImageAsDataUrl(ctx: Context, imageUrl: string, userAgent: string) {
+async function fetchImageAsDataUrl(
+  ctx: Context,
+  imageUrl: string,
+  userAgent: string,
+) {
   const response = await ctx.http(imageUrl, {
     responseType: 'arraybuffer',
     timeout: 15000,
@@ -94,7 +107,8 @@ async function fetchImageAsDataUrl(ctx: Context, imageUrl: string, userAgent: st
       'User-Agent': userAgent,
     },
   })
-  const contentType = response.headers.get('content-type')?.split(';', 1)[0] || 'image/jpeg'
+  const contentType =
+    response.headers.get('content-type')?.split(';', 1)[0] || 'image/jpeg'
   const base64 = Buffer.from(response.data).toString('base64')
   return `data:${contentType};base64,${base64}`
 }
@@ -105,7 +119,8 @@ function formatDuration(seconds: number) {
   const minutes = Math.floor((seconds % 3600) / 60)
   const minutesStr = minutes > 9 ? `${minutes}:` : `0${minutes}:`
   const remainingSeconds = seconds % 60
-  const secondsStr = remainingSeconds > 9 ? `${remainingSeconds}` : `0${remainingSeconds}`
+  const secondsStr =
+    remainingSeconds > 9 ? `${remainingSeconds}` : `0${remainingSeconds}`
   return `${hourStr}${minutesStr}${secondsStr}`
 }
 
@@ -155,6 +170,61 @@ function isRepeat(ctx: Context, session: Session, bvNumber: string) {
   return isRepeat
 }
 
+function parseShortHash(url: string) {
+  const match = shortLinkRegex.exec(url)
+  return match ? match[1] : null
+}
+
+async function getBvFromShortLink(
+  ctx: Context,
+  userAgent: string,
+  link: string,
+) {
+  var hash = parseShortHash(link)
+  if (!hash) return null
+
+  var data = await ctx.http.get('https://b23.tv/' + hash, {
+    redirect: 'manual',
+    headers: {
+      'User-Agent': userAgent,
+    },
+  })
+
+  const match = data.match(/<a\s+(?:[^>]*?\s+)?href="([^"]*)"/i)
+  if (!match?.[1]) return null
+
+  const normalLink = match[1]
+  const bv = bvNumberRegex.exec(normalLink)
+  if (bv) return bv[0]
+
+  return null
+}
+
+async function getBvNumber(ctx: Context, userAgent: string, session: Session<never, never, Context>) {
+  // 卡片
+  const firstElement = session.elements?.[0]
+  if (!firstElement) return null
+
+  if (firstElement.type === 'json') {
+    try {
+      const cardJson = JSON.parse(firstElement.attrs.data ?? '{}')
+      const shortLink = cardJson.meta?.detail_1?.qqdocurl
+      if (shortLink) return await getBvFromShortLink(ctx, userAgent, shortLink)
+    } catch (error) {
+      log.warn(`Failed to parse card JSON: ${error}`)
+    }
+  }
+
+  const content = session.stripped.content
+
+  // bv号
+  const bv = bvNumberRegex.exec(content)
+  if (bv) return bv[0]
+
+  // 短链接
+  return await getBvFromShortLink(ctx, userAgent, content)
+}
+
 export function apply(ctx: Context, config: Config) {
   log = ctx.logger('bili-link-previewer')
   log.info('Plugin reloaded.')
@@ -162,11 +232,9 @@ export function apply(ctx: Context, config: Config) {
   log.info('Config: userAgent = ' + config.userAgent)
 
   ctx.middleware(async (session, next) => {
-    const content = session.stripped.content
-    const bv = bvNumberRegex.exec(content)
-    if (!bv) return next()
+    const bvNumber = await getBvNumber(ctx, config.userAgent, session)
+    if (!bvNumber) return next()
 
-    const bvNumber = bv[0]
     if (isRepeat(ctx, session, bvNumber)) return
 
     const totalStartedAt = Date.now()
@@ -178,8 +246,10 @@ export function apply(ctx: Context, config: Config) {
     const resp = await fetchInfo(ctx, bvNumber, config.userAgent)
     fetchInfoElapsed = Date.now() - fetchInfoStartedAt
     if (resp.code !== 0 || !resp.data) {
-      log.error(`Fetch video info failed (${resp.code}: ${resp.message}). Raw user message: \n${content}`)
-      return `${bvNumber} 视频信息获取异常：${resp.message} (${resp.code})`
+      log.error(
+        `${bvNumber}: Fetch video info failed (${resp.code}: ${resp.message})`,
+      )
+      return `${bvNumber} 视频信息获取异常 (${resp.code}: ${resp.message})`
     }
 
     const respData = resp.data
@@ -187,9 +257,15 @@ export function apply(ctx: Context, config: Config) {
     if (respData.pic) {
       const inlineCoverStartedAt = Date.now()
       try {
-        coverUrl = await fetchImageAsDataUrl(ctx, respData.pic, config.userAgent)
+        coverUrl = await fetchImageAsDataUrl(
+          ctx,
+          respData.pic,
+          config.userAgent,
+        )
       } catch (error) {
-        log.warn(`Inline cover fetch failed for ${bvNumber}, fallback placeholder will be used: ${error}`)
+        log.warn(
+          `Inline cover fetch failed for ${bvNumber}, fallback placeholder will be used: ${error}`,
+        )
       } finally {
         inlineCoverElapsed = Date.now() - inlineCoverStartedAt
       }
@@ -219,20 +295,24 @@ export function apply(ctx: Context, config: Config) {
       const renderedCard = await ctx.puppeteer.render(
         cardHtml,
         async (page, next) => {
-          const card = await page.$('#card');
-          return next(card ?? undefined);
-        }
+          const card = await page.$('#card')
+          return next(card ?? undefined)
+        },
       )
       renderElapsed = Date.now() - renderStartedAt
       const totalElapsed = Date.now() - totalStartedAt
-      log.info(`Rendered ${bvNumber} in ${totalElapsed}ms (fetchInfo=${fetchInfoElapsed}ms, inlineCover=${inlineCoverElapsed}ms, render=${renderElapsed}ms)`)
+      log.info(
+        `Rendered ${bvNumber} in ${totalElapsed}ms (fetchInfo=${fetchInfoElapsed}ms, inlineCover=${inlineCoverElapsed}ms, render=${renderElapsed}ms)`,
+      )
       return renderedCard + `\nhttps://www.bilibili.com/video/${bvNumber}`
     } catch (error) {
       if (renderStartedAt) {
         renderElapsed = Date.now() - renderStartedAt
       }
       const totalElapsed = Date.now() - totalStartedAt
-      log.error(`Render failed for ${bvNumber} after ${totalElapsed}ms (fetchInfo=${fetchInfoElapsed}ms, inlineCover=${inlineCoverElapsed}ms, render=${renderElapsed}ms): ${error}`)
+      log.error(
+        `Render failed for ${bvNumber} after ${totalElapsed}ms (fetchInfo=${fetchInfoElapsed}ms, inlineCover=${inlineCoverElapsed}ms, render=${renderElapsed}ms): ${error}`,
+      )
       throw error
     }
   })
